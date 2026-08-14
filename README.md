@@ -28,13 +28,13 @@ The raw flat CSV (single table) was normalized into 4 relational tables to refle
 ## Business Questions Answered
 
 1. **What is the monthly revenue trend?**
-   Revenue peaked in November 2011 (₤1.46M), consistent with pre-holiday season buying.
+   Revenue peaked in November 2011 (£1.46M), consistent with pre-holiday season buying.
 
 2. **What are the top 10 products by revenue?**
    Identified best-selling products after filtering out non-product administrative entries.
 
 3. **Who are the top customers by total spend?**
-   Top customer contributed ₤279K — nearly double the next highest, suggesting a wholesale/business account.
+   Top customer contributed £279K — nearly double the next highest, suggesting a wholesale/business account.
 
 4. **What is the month-over-month revenue growth rate?**
    Used a CTE + `LAG()` window function to calculate % growth, showing strong acceleration (+49%) heading into September–November.
