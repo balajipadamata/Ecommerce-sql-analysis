@@ -1,64 +1,31 @@
-create database ecommerce_project;
-use ecommerce_project;
-create table raw_salea(
-InvoiceNo     VARCHAR(20),
+-- ============================================================
+-- E-Commerce Sales Analysis
+-- Dataset: UK Online Retail Dataset (Kaggle) - 541,909 transactions
+-- Author: Balaji
+-- ============================================================
+
+
+-- ============================================================
+-- SECTION 1: DATABASE & STAGING TABLE SETUP
+-- ============================================================
+
+CREATE DATABASE IF NOT EXISTS ecommerce_project;
+USE ecommerce_project;
+
+-- Staging table matching the raw CSV structure
+CREATE TABLE raw_sales (
+    InvoiceNo     VARCHAR(20),
     StockCode     VARCHAR(20),
     Description   VARCHAR(255),
     Quantity      INT,
     InvoiceDate   VARCHAR(30),
     UnitPrice     DECIMAL(10,2),
-    CustomerID    INT null,
+    CustomerID    INT,
     Country       VARCHAR(50)
 );
-Alter table raw_salea 
-modify CustomerID varchar(50);
-describe raw_salea;
-SHOW CREATE TABLE raw_salea;
 
-INSERT INTO raw_salea
-(InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country)
-VALUES
-('C536391', '85123A', 'WHITE HANGING HEART T-LIGHT HOLDER', 6,
- '12/1/2010 8:26', 2.55, '17850', 'United Kingdom');
- 
- LOAD DATA LOCAL INFILE 'C:/Users/DELL/Downloads/data.csv'
-INTO TABLE raw_sales
-FIELDS TERMINATED BY ','
-ENCLOSED BY '"'
-LINES TERMINATED BY '\r\n'
-IGNORE 1 ROWS
-(InvoiceNo, StockCode, Description, Quantity, InvoiceDate, @UnitPrice, @CustomerID, Country)
-SET 
-    UnitPrice = NULLIF(@UnitPrice, ''),
-    CustomerID = NULLIF(@CustomerID, '');
-    
-    SET GLOBAL local_infile = 1;
-    show tables
-    
-    LOAD DATA LOCAL INFILE 'C:/Users/DELL/Downloads/data.csv'
-INTO TABLE raw_sales
-FIELDS TERMINATED BY ','
-ENCLOSED BY '"'
-LINES TERMINATED BY '\r\n'
-IGNORE 1 ROWS
-(InvoiceNo, StockCode, Description, Quantity, InvoiceDate, @UnitPrice, @CustomerID, Country)
-SET 
-    UnitPrice = NULLIF(@UnitPrice, ''),
-    CustomerID = NULLIF(@CustomerID, '');
-    RENAME TABLE raw_salea TO raw_sales;
-    SHOW VARIABLES LIKE 'secure_file_priv';
+-- Bulk load the CSV (encoding set to latin1 to handle special characters)
 LOAD DATA INFILE 'C:/ProgramData/MySQL/MySQL Server 8.0/Uploads/data.csv'
-INTO TABLE raw_sales
-FIELDS TERMINATED BY ','
-ENCLOSED BY '"'
-LINES TERMINATED BY '\r\n'
-IGNORE 1 ROWS
-(InvoiceNo, StockCode, Description, Quantity, InvoiceDate, @UnitPrice, @CustomerID, Country)
-SET
-    UnitPrice = NULLIF(@UnitPrice, ''),
-    CustomerID = NULLIF(@CustomerID, '');
-    
-    LOAD DATA INFILE 'C:/ProgramData/MySQL/MySQL Server 8.0/Uploads/data.csv'
 INTO TABLE raw_sales
 CHARACTER SET latin1
 FIELDS TERMINATED BY ','
@@ -69,41 +36,49 @@ IGNORE 1 ROWS
 SET
     UnitPrice = NULLIF(@UnitPrice, ''),
     CustomerID = NULLIF(@CustomerID, '');
-    
-    SELECT COUNT(*) FROM raw_sales;
-    
-    CREATE TABLE Customers (
+
+SELECT COUNT(*) AS total_rows_loaded FROM raw_sales;  -- Expect 541,909
+
+
+-- ============================================================
+-- SECTION 2: NORMALIZED SCHEMA (Customers, Products, Orders, OrderDetails)
+-- ============================================================
+
+-- --- Customers ---
+CREATE TABLE Customers (
     CustomerID INT PRIMARY KEY,
     Country VARCHAR(50)
 );
 
-INSERT INTO Customers (CustomerID, Country)
-SELECT DISTINCT CustomerID, Country
-FROM raw_sales
-WHERE CustomerID IS NOT NULL;
-
+-- Some customers have inconsistent Country values across rows; MAX() picks one consistently
 INSERT INTO Customers (CustomerID, Country)
 SELECT CustomerID, MAX(Country)
 FROM raw_sales
 WHERE CustomerID IS NOT NULL
 GROUP BY CustomerID;
 
-SELECT COUNT(*) FROM Customers;
-SELECT * FROM Customers LIMIT 10;
-
+-- --- Products ---
 CREATE TABLE Products (
     StockCode VARCHAR(20) PRIMARY KEY,
     Description VARCHAR(255)
 );
 
+-- Picks the MOST FREQUENTLY used description per StockCode, filtering out
+-- rare junk entries (e.g. "damaged", "mailout") that appear as stray Description values
 INSERT INTO Products (StockCode, Description)
-SELECT StockCode, MAX(Description)
-FROM raw_sales
-WHERE StockCode IS NOT NULL
-GROUP BY StockCode;
+SELECT StockCode, Description
+FROM (
+    SELECT
+        StockCode,
+        Description,
+        ROW_NUMBER() OVER (PARTITION BY StockCode ORDER BY COUNT(*) DESC) AS rn
+    FROM raw_sales
+    WHERE StockCode IS NOT NULL AND Description IS NOT NULL
+    GROUP BY StockCode, Description
+) ranked
+WHERE rn = 1;
 
-SELECT COUNT(*) FROM Products;
-SELECT * FROM Products LIMIT 10;
+-- --- Orders ---
 CREATE TABLE Orders (
     InvoiceNo VARCHAR(20) PRIMARY KEY,
     CustomerID INT,
@@ -115,8 +90,8 @@ INSERT INTO Orders (InvoiceNo, CustomerID, InvoiceDate)
 SELECT InvoiceNo, MAX(CustomerID), STR_TO_DATE(MAX(InvoiceDate), '%m/%d/%Y %H:%i')
 FROM raw_sales
 GROUP BY InvoiceNo;
-select count(*) from orders
 
+-- --- OrderDetails ---
 CREATE TABLE OrderDetails (
     OrderDetailID INT AUTO_INCREMENT PRIMARY KEY,
     InvoiceNo VARCHAR(20),
@@ -127,15 +102,23 @@ CREATE TABLE OrderDetails (
     FOREIGN KEY (StockCode) REFERENCES Products(StockCode)
 );
 
-
-TRUNCATE TABLE OrderDetails;
 INSERT INTO OrderDetails (InvoiceNo, StockCode, Quantity, UnitPrice)
 SELECT InvoiceNo, StockCode, Quantity, UnitPrice
 FROM raw_sales;
 
-SELECT COUNT(*) FROM OrderDetails;
+-- Sanity checks
+SELECT COUNT(*) AS customers_count FROM Customers;      -- ~4,372
+SELECT COUNT(*) AS products_count  FROM Products;        -- ~3,958
+SELECT COUNT(*) AS orders_count    FROM Orders;           -- ~25,900
+SELECT COUNT(*) AS orderdetails_count FROM OrderDetails;  -- ~541,909
 
-SELECT 
+
+-- ============================================================
+-- SECTION 3: BUSINESS ANALYSIS QUERIES
+-- ============================================================
+
+-- Q1: Monthly Revenue Trend
+SELECT
     DATE_FORMAT(o.InvoiceDate, '%Y-%m') AS Month,
     ROUND(SUM(od.Quantity * od.UnitPrice), 2) AS Revenue
 FROM Orders o
@@ -143,50 +126,10 @@ JOIN OrderDetails od ON o.InvoiceNo = od.InvoiceNo
 GROUP BY Month
 ORDER BY Month;
 
-SELECT 
-    p.Description,
-    SUM(od.Quantity * od.UnitPrice) AS Revenue
-FROM OrderDetails od
-JOIN Products p ON od.StockCode = p.StockCode
-GROUP BY p.Description
-ORDER BY Revenue DESC
-LIMIT 10;
 
-SELECT 
-    p.StockCode,
-    p.Description,
-    SUM(od.Quantity * od.UnitPrice) AS Revenue
-FROM OrderDetails od
-JOIN Products p ON od.StockCode = p.StockCode
-WHERE p.StockCode NOT IN ('POST', 'D', 'M', 'BANK CHARGES', 'DOT', 'CRUK', 'AMAZONFEE', 'S', 'C2')
-  AND od.Quantity > 0
-GROUP BY p.StockCode, p.Description
-ORDER BY Revenue DESC
-LIMIT 10;
-SET FOREIGN_KEY_CHECKS = 0;
-
-SET FOREIGN_KEY_CHECKS = 0;
-
-SET FOREIGN_KEY_CHECKS = 0;
-
-TRUNCATE TABLE Products;
-
-INSERT INTO Products (StockCode, Description)
-SELECT StockCode, Description
-FROM (
-    SELECT 
-        StockCode, 
-        Description,
-        ROW_NUMBER() OVER (PARTITION BY StockCode ORDER BY COUNT(*) DESC) AS rn
-    FROM raw_sales
-    WHERE StockCode IS NOT NULL AND Description IS NOT NULL
-    GROUP BY StockCode, Description
-) ranked
-WHERE rn = 1;
-
-SET FOREIGN_KEY_CHECKS = 1;
-
-SELECT 
+-- Q2: Top 10 Products by Revenue
+-- (Excludes non-product admin codes like postage/bank charges/manual adjustments)
+SELECT
     p.StockCode,
     p.Description,
     SUM(od.Quantity * od.UnitPrice) AS Revenue
@@ -198,7 +141,9 @@ GROUP BY p.StockCode, p.Description
 ORDER BY Revenue DESC
 LIMIT 10;
 
-SELECT 
+
+-- Q3: Top 10 Customers by Total Spend
+SELECT
     c.CustomerID,
     c.Country,
     ROUND(SUM(od.Quantity * od.UnitPrice), 2) AS TotalSpend
@@ -209,33 +154,37 @@ GROUP BY c.CustomerID, c.Country
 ORDER BY TotalSpend DESC
 LIMIT 10;
 
+
+-- Q4: Month-over-Month Revenue Growth % (CTE + LAG window function)
 WITH monthly_revenue AS (
-    SELECT 
+    SELECT
         DATE_FORMAT(o.InvoiceDate, '%Y-%m') AS Month,
         SUM(od.Quantity * od.UnitPrice) AS Revenue
     FROM Orders o
     JOIN OrderDetails od ON o.InvoiceNo = od.InvoiceNo
     GROUP BY Month
 )
-SELECT 
+SELECT
     Month,
     Revenue,
     ROUND(
-        (Revenue - LAG(Revenue) OVER (ORDER BY Month)) 
+        (Revenue - LAG(Revenue) OVER (ORDER BY Month))
         / LAG(Revenue) OVER (ORDER BY Month) * 100, 2
     ) AS GrowthPercent
 FROM monthly_revenue
 ORDER BY Month;
 
-SELECT 
-    CASE 
+
+-- Q5: Repeat vs One-Time Customers
+SELECT
+    CASE
         WHEN OrderCount = 1 THEN 'One-Time Customer'
         ELSE 'Repeat Customer'
     END AS CustomerType,
     COUNT(*) AS NumberOfCustomers,
     ROUND(AVG(TotalSpend), 2) AS AvgSpendPerCustomer
 FROM (
-    SELECT 
+    SELECT
         c.CustomerID,
         COUNT(DISTINCT o.InvoiceNo) AS OrderCount,
         SUM(od.Quantity * od.UnitPrice) AS TotalSpend
@@ -246,8 +195,11 @@ FROM (
 ) customer_summary
 GROUP BY CustomerType;
 
+
+-- Q6: RFM Segmentation (Recency, Frequency, Monetary)
+-- Segments customers into Champions / Loyal / At Risk / Lost using NTILE() quartiles
 WITH rfm_base AS (
-    SELECT 
+    SELECT
         c.CustomerID,
         DATEDIFF((SELECT MAX(InvoiceDate) FROM Orders), MAX(o.InvoiceDate)) AS Recency,
         COUNT(DISTINCT o.InvoiceNo) AS Frequency,
@@ -258,7 +210,7 @@ WITH rfm_base AS (
     GROUP BY c.CustomerID
 ),
 rfm_scores AS (
-    SELECT 
+    SELECT
         CustomerID,
         Recency,
         Frequency,
@@ -268,8 +220,8 @@ rfm_scores AS (
         NTILE(4) OVER (ORDER BY Monetary ASC) AS M_Score
     FROM rfm_base
 )
-SELECT 
-    CASE 
+SELECT
+    CASE
         WHEN R_Score >= 3 AND F_Score >= 3 AND M_Score >= 3 THEN 'Champions'
         WHEN R_Score >= 3 AND F_Score >= 2 THEN 'Loyal Customers'
         WHEN R_Score <= 2 AND F_Score >= 3 THEN 'At Risk'
