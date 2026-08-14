@@ -40,7 +40,7 @@ The raw flat CSV (single table) was normalized into 4 relational tables to refle
    Used a CTE + `LAG()` window function to calculate % growth, showing strong acceleration (+49%) heading into September–November.
 
 5. **How do repeat customers compare to one-time customers?**
-   Repeat customers (70% of the base) spend ~8x more on average (₤2,571 vs ₤330) than one-time buyers — a strong case for retention-focused strategy.
+   Repeat customers (70% of the base) spend ~8x more on average (£2,571 vs £330) than one-time buyers — a strong case for retention-focused strategy.
 
 6. **How can customers be segmented using RFM analysis?**
    Segmented customers into Champions, Loyal Customers, At Risk, and Lost/Churned using `NTILE()` window functions across Recency, Frequency, and Monetary dimensions — 1,349 "Champion" customers were identified as the highest-value segment.
